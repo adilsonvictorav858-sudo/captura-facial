@@ -12,11 +12,22 @@ body{
     font-family:Arial;
     text-align:center;
 }
-video{
+video, canvas{
     width:90%;
     max-width:700px;
     margin-top:20px;
     border-radius:15px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 80px;
+}
+#video-container {
+    position: relative;
+    display: inline-block;
+    width: 90%;
+    max-width: 700px;
+    height: auto;
 }
 #instruction{
     font-size:40px;
@@ -26,6 +37,8 @@ video{
 #timer{
     font-size:60px;
     color:#00ff88;
+    min-height: 70px;
+    margin-bottom: 10px;
 }
 button{
     padding:15px 30px;
@@ -48,12 +61,17 @@ button{
     transition: width 0.3s;
 }
 </style>
+<!-- face-api.js CDN -->
+<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
 
 <h1>Captura Facial</h1>
 
-<video id="preview" autoplay muted playsinline></video>
+<div id="video-container" style="position:relative;">
+    <video id="preview" autoplay muted playsinline></video>
+    <canvas id="overlay" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
+</div>
 
 <div id="instruction">
 Clique em iniciar
@@ -70,6 +88,7 @@ Clique em iniciar
 
 <script>
 const video = document.getElementById("preview");
+const canvas = document.getElementById("overlay");
 const instruction = document.getElementById("instruction");
 const timer = document.getElementById("timer");
 const startBtn = document.getElementById("startBtn");
@@ -77,33 +96,54 @@ const stopBtn = document.getElementById("stopBtn");
 const progressBar = document.getElementById("progress");
 
 const steps = [
- {text:"👀 Olhe para a câmera", duration:5},
- {text:"😊 Sorria", duration:3},
- {text:"⬆️ Olhe para cima", duration:7},
- {text:"⬇️ Olhe para baixo", duration:7},
- {text:"⬅️ Olhe para esquerda", duration:7},
- {text:"➡️ Olhe para direita", duration:7},
- {text:"↖️ Superior esquerda", duration:7},
- {text:"↗️ Superior direita", duration:7},
- {text:"↙️ Inferior esquerda", duration:7},
- {text:"↘️ Inferior direita", duration:7}
+ {text:"👀 Olhe para a câmera", duration:5, direction:"center"},
+ {text:"😊 Sorria", duration:3, direction:"smile"},
+ {text:"⬆️ Olhe para cima", duration:7, direction:"up"},
+ {text:"⬇️ Olhe para baixo", duration:7, direction:"down"},
+ {text:"⬅️ Olhe para esquerda", duration:7, direction:"left"},
+ {text:"➡️ Olhe para direita", duration:7, direction:"right"},
+ {text:"↖️ Superior esquerda", duration:7, direction:"up_left"},
+ {text:"↗️ Superior direita", duration:7, direction:"up_right"},
+ {text:"↙️ Inferior esquerda", duration:7, direction:"down_left"},
+ {text:"↘️ Inferior direita", duration:7, direction:"down_right"}
 ];
 
 let mediaRecorder;
 let chunks = [];
 let stopped = false;
 let stream = null;
+let modelsLoaded = false;
+let detectionInterval = null;
+let holdStart = null;
+let holdProgress = 0;
+let holdRequired = 1.5; // segundos
+let currentStep = 0;
+let totalTime = steps.reduce((a, b) => a + b.duration, 0);
+let elapsed = 0;
+let running = false;
 
 startBtn.onclick = startCapture;
 stopBtn.onclick = stopCapture;
 
+// Carregar modelos face-api.js
+async function loadModels() {
+    if (modelsLoaded) return;
+    instruction.innerText = "Carregando modelos de IA...";
+    await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
+    await faceapi.nets.faceLandmark68TinyNet.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
+    modelsLoaded = true;
+}
+
 async function startCapture() {
     stopped = false;
+    running = true;
     startBtn.disabled = true;
     stopBtn.disabled = false;
     progressBar.style.width = "0%";
     instruction.innerText = "Prepare-se";
     timer.innerText = "";
+
+    await loadModels();
 
     // Solicita permissão de vídeo e áudio
     try {
@@ -115,6 +155,12 @@ async function startCapture() {
         stopBtn.disabled = true;
         return;
     }
+
+    // Ajusta canvas ao vídeo
+    video.onloadedmetadata = () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+    };
 
     // 3-2-1 countdown
     for (let i = 3; i > 0; i--) {
@@ -149,11 +195,14 @@ async function startCapture() {
 
     mediaRecorder.start();
 
+    currentStep = 0;
+    elapsed = 0;
     runSteps();
 }
 
 function stopCapture() {
     stopped = true;
+    running = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
@@ -161,27 +210,90 @@ function stopCapture() {
     }
     instruction.innerText = "⏹️ Gravação parada";
     timer.innerText = "";
+    clearInterval(detectionInterval);
+    clearCanvas();
+}
+
+function clearCanvas() {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
 async function runSteps() {
-    let totalTime = steps.reduce((a, b) => a + b.duration, 0);
-    let elapsed = 0;
-
-    for (const step of steps) {
+    for (currentStep = 0; currentStep < steps.length; currentStep++) {
         if (stopped) return;
+        const step = steps[currentStep];
         instruction.innerText = step.text;
-        for (let i = step.duration; i > 0; i--) {
-            if (stopped) return;
-            timer.innerText = i;
-            elapsed++;
-            progressBar.style.width = ((elapsed / totalTime) * 100) + "%";
-            await new Promise(r => setTimeout(r, 1000));
+        holdStart = null;
+        holdProgress = 0;
+        let stepDone = false;
+        let stepElapsed = 0;
+
+        // Inicia detecção de movimento
+        detectionInterval = setInterval(async () => {
+            if (!running) return;
+            const result = await detectDirection(step.direction);
+            drawOverlay(result.correct);
+
+            if (result.correct) {
+                if (!holdStart) holdStart = Date.now();
+                holdProgress = (Date.now() - holdStart) / 1000;
+                if (holdProgress > holdRequired) holdProgress = holdRequired;
+            } else {
+                holdStart = null;
+                holdProgress = 0;
+            }
+
+            // Mostra barra de progresso de "hold"
+            timer.innerHTML = `
+                <div style="font-size:28px;color:#fff;">Mantenha por ${(holdRequired - holdProgress).toFixed(1)}s</div>
+                <div style="background:#222;border-radius:10px;width:80%;margin:10px auto;height:18px;overflow:hidden;">
+                    <div style="height:18px;width:${(holdProgress/holdRequired)*100}%;background:#00ff88;transition:width 0.2s;"></div>
+                </div>
+            `;
+
+            if (holdProgress >= holdRequired) {
+                stepDone = true;
+            }
+        }, 100);
+
+        // Espera até o usuário segurar a direção correta por 1.5s
+        while (!stepDone && !stopped) {
+            await new Promise(r => setTimeout(r, 100));
         }
-        if (stopped) return;
-        instruction.innerText = "⏳ Prepare-se";
-        for (let j = 3; j > 0; j--) {
-            timer.innerText = j;
-            await new Promise(r => setTimeout(r, 1000));
+        clearInterval(detectionInterval);
+        timer.innerHTML = "";
+
+        // Avança barra de progresso geral
+        elapsed += step.duration;
+        progressBar.style.width = ((elapsed / totalTime) * 100) + "%";
+
+        // "Sorria" não precisa de detecção de direção, só espera o tempo
+        if (step.direction === "smile" && !stopped) {
+            instruction.innerText = step.text;
+            for (let i = step.duration; i > 0; i--) {
+                if (stopped) return;
+                timer.innerText = i;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+            timer.innerText = "";
+        } else if (!stopped) {
+            // Após segurar, espera o tempo do passo
+            for (let i = step.duration; i > 0; i--) {
+                if (stopped) return;
+                timer.innerText = i;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+            timer.innerText = "";
+        }
+
+        // Pequena pausa entre passos
+        if (!stopped && currentStep < steps.length - 1) {
+            instruction.innerText = "⏳ Prepare-se";
+            for (let j = 3; j > 0; j--) {
+                timer.innerText = j;
+                await new Promise(r => setTimeout(r, 1000));
+            }
         }
     }
     timer.innerText = "";
@@ -191,6 +303,92 @@ async function runSteps() {
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
         mediaRecorder.stop();
     }
+    clearCanvas();
+}
+
+// Função para desenhar borda verde/vermelha
+function drawOverlay(correct) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = correct ? "#00ff88" : "#ff4444";
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+}
+
+// Função para detectar direção do rosto
+async function detectDirection(targetDirection) {
+    if (!video || video.readyState < 2) return {correct: false};
+    const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
+    if (!detection || !detection.landmarks) return {correct: false};
+
+    // Smile detection (simplificada)
+    if (targetDirection === "smile") {
+        // Pode-se aprimorar usando landmarks da boca
+        // Aqui, apenas retorna true para não travar o fluxo
+        return {correct: true};
+    }
+
+    // Obter landmarks relevantes
+    const lm = detection.landmarks;
+    const nose = lm.getNose()[3]; // ponta do nariz
+    const leftEye = lm.getLeftEye();
+    const rightEye = lm.getRightEye();
+    const jaw = lm.getJawOutline();
+
+    // Cálculo de ângulos aproximados
+    // Centro dos olhos
+    const eyeCenter = {
+        x: (leftEye[0].x + rightEye[3].x) / 2,
+        y: (leftEye[0].y + rightEye[3].y) / 2
+    };
+    // Vetor nariz-olhos
+    const dx = nose.x - eyeCenter.x;
+    const dy = nose.y - eyeCenter.y;
+
+    // Inclinação horizontal (esquerda/direita)
+    const horizontal = dx / (video.videoWidth * 0.12); // normalizado
+    // Inclinação vertical (cima/baixo)
+    const vertical = dy / (video.videoHeight * 0.10); // normalizado
+
+    // Inclinação diagonal (canto)
+    // Para diagonais, combinamos horizontal e vertical
+
+    // Mapeamento de tolerância
+    const tol = 0.35; // tolerância
+
+    let correct = false;
+    switch(targetDirection) {
+        case "center":
+            correct = Math.abs(horizontal) < tol && Math.abs(vertical) < tol;
+            break;
+        case "up":
+            correct = vertical < -tol && Math.abs(horizontal) < tol;
+            break;
+        case "down":
+            correct = vertical > tol && Math.abs(horizontal) < tol;
+            break;
+        case "left":
+            correct = horizontal < -tol && Math.abs(vertical) < tol;
+            break;
+        case "right":
+            correct = horizontal > tol && Math.abs(vertical) < tol;
+            break;
+        case "up_left":
+            correct = vertical < -tol && horizontal < -tol;
+            break;
+        case "up_right":
+            correct = vertical < -tol && horizontal > tol;
+            break;
+        case "down_left":
+            correct = vertical > tol && horizontal < -tol;
+            break;
+        case "down_right":
+            correct = vertical > tol && horizontal > tol;
+            break;
+        default:
+            correct = false;
+    }
+    return {correct};
 }
 </script>
 </body>
