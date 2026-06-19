@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Captura Facial</title>
+<style>
+body{
+    margin:0;
+    background:#111;
+    color:white;
+    font-family:Arial;
+    text-align:center;
+}
+video{
+    width:90%;
+    max-width:700px;
+    margin-top:20px;
+    border-radius:15px;
+}
+#instruction{
+    font-size:40px;
+    margin-top:20px;
+    font-weight:bold;
+}
+#timer{
+    font-size:60px;
+    color:#00ff88;
+}
+button{
+    padding:15px 30px;
+    font-size:20px;
+    margin-top:20px;
+    cursor:pointer;
+}
+#progress-container {
+    width:90%;
+    max-width:700px;
+    margin:20px auto;
+    background:#333;
+    border-radius:20px;
+}
+#progress {
+    height:20px;
+    width:0%;
+    background:#00ff88;
+    border-radius:20px;
+    transition: width 0.3s;
+}
+</style>
+</head>
+<body>
+
+<h1>Captura Facial</h1>
+
+<video id="preview" autoplay muted playsinline></video>
+
+<div id="instruction">
+Clique em iniciar
+</div>
+
+<div id="timer"></div>
+
+<button id="startBtn">Iniciar Captura</button>
+<button id="stopBtn" disabled>Parar Gravação</button>
+
+<div id="progress-container">
+    <div id="progress"></div>
+</div>
+
+<script>
+const video = document.getElementById("preview");
+const instruction = document.getElementById("instruction");
+const timer = document.getElementById("timer");
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const progressBar = document.getElementById("progress");
+
+const steps = [
+ {text:"👀 Olhe para a câmera", duration:5},
+ {text:"😊 Sorria", duration:3},
+ {text:"⬆️ Olhe para cima", duration:7},
+ {text:"⬇️ Olhe para baixo", duration:7},
+ {text:"⬅️ Olhe para esquerda", duration:7},
+ {text:"➡️ Olhe para direita", duration:7},
+ {text:"↖️ Superior esquerda", duration:7},
+ {text:"↗️ Superior direita", duration:7},
+ {text:"↙️ Inferior esquerda", duration:7},
+ {text:"↘️ Inferior direita", duration:7}
+];
+
+let mediaRecorder;
+let chunks = [];
+let stopped = false;
+let stream = null;
+
+startBtn.onclick = startCapture;
+stopBtn.onclick = stopCapture;
+
+async function startCapture() {
+    stopped = false;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    progressBar.style.width = "0%";
+    instruction.innerText = "Prepare-se";
+    timer.innerText = "";
+
+    // Solicita permissão de vídeo e áudio
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        video.srcObject = stream;
+    } catch (err) {
+        instruction.innerText = "Permissão negada ou erro na câmera/microfone.";
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        return;
+    }
+
+    // 3-2-1 countdown
+    for (let i = 3; i > 0; i--) {
+        timer.innerText = i;
+        await new Promise(r => setTimeout(r, 1000));
+    }
+    timer.innerText = "";
+
+    // Inicializa MediaRecorder
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = "captura_facial.webm";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }, 100);
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+        }
+    };
+
+    mediaRecorder.start();
+
+    runSteps();
+}
+
+function stopCapture() {
+    stopped = true;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+    }
+    instruction.innerText = "⏹️ Gravação parada";
+    timer.innerText = "";
+}
+
+async function runSteps() {
+    let totalTime = steps.reduce((a, b) => a + b.duration, 0);
+    let elapsed = 0;
+
+    for (const step of steps) {
+        if (stopped) return;
+        instruction.innerText = step.text;
+        for (let i = step.duration; i > 0; i--) {
+            if (stopped) return;
+            timer.innerText = i;
+            elapsed++;
+            progressBar.style.width = ((elapsed / totalTime) * 100) + "%";
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        if (stopped) return;
+        instruction.innerText = "⏳ Prepare-se";
+        for (let j = 3; j > 0; j--) {
+            timer.innerText = j;
+            await new Promise(r => setTimeout(r, 1000));
+        }
+    }
+    timer.innerText = "";
+    instruction.innerText = "✅ Concluído";
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+    }
+}
+</script>
+</body>
+</html>
