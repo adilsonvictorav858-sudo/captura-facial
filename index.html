@@ -1,267 +1,334 @@
 <!DOCTYPE html>
 <html lang="pt">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Captura Facial</title>
-<style>
-body{margin:0;background:#111;color:white;font-family:Arial;text-align:center;}
-#video-container{position:relative;display:inline-block;width:90%;max-width:700px;margin-top:20px;}
-video{width:100%;border-radius:15px;display:block;}
-canvas{position:absolute;top:0;left:0;width:100%;height:100%;border-radius:15px;pointer-events:none;}
-#instruction{font-size:36px;margin-top:20px;font-weight:bold;}
-#timer{font-size:50px;color:#00ff88;min-height:70px;margin-bottom:10px;}
-#model-status{font-size:14px;color:#aaa;min-height:20px;margin:5px 0;}
-button{padding:15px 30px;font-size:20px;margin-top:20px;cursor:pointer;}
-#progress-container{width:90%;max-width:700px;margin:20px auto;background:#333;border-radius:20px;}
-#progress{height:20px;width:0%;background:#00ff88;border-radius:20px;transition:width 0.3s;}
-</style>
-<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Captura Facial</title>
+  <style>
+    body{margin:0;background:#111;color:white;font-family:Arial;text-align:center;}
+    #video-container{position:relative;display:inline-block;width:90%;max-width:700px;margin-top:20px;}
+    video{width:100%;border-radius:15px;display:block;}
+    canvas{position:absolute;top:0;left:0;width:100%;height:100%;border-radius:15px;pointer-events:none;}
+    #instruction{font-size:36px;margin-top:20px;font-weight:bold;}
+    #timer{font-size:50px;color:#00ff88;min-height:70px;margin-bottom:10px;}
+    #model-status{font-size:14px;color:#aaa;min-height:20px;margin:5px 0;}
+    button{padding:15px 30px;font-size:20px;margin-top:20px;cursor:pointer;}
+    #progress-container{width:90%;max-width:700px;margin:20px auto;background:#333;border-radius:20px;}
+    #progress{height:20px;width:0%;background:#00ff88;border-radius:20px;transition:width 0.3s;}
+    #debugPanel{background:#222;color:#ffb300;padding:10px 0;margin:10px auto 0 auto;max-width:700px;border-radius:10px;min-height:24px;font-size:15px;}
+  </style>
 </head>
 <body>
-<h1>Captura Facial</h1>
-<div id="video-container">
-  <video id="preview" autoplay muted playsinline></video>
-  <canvas id="overlay"></canvas>
-</div>
-<div id="model-status">Aguardando início...</div>
-<div id="instruction">Clique em iniciar</div>
-<div id="timer"></div>
-<button id="startBtn">Iniciar Captura</button>
-<button id="stopBtn" disabled>Parar Gravação</button>
-<div id="progress-container"><div id="progress"></div></div>
+  <h1>Captura Facial</h1>
+  <div id="video-container">
+    <video id="preview" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div id="model-status">Aguardando início...</div>
+  <div id="instruction">Clique em iniciar</div>
+  <div id="timer"></div>
+  <button id="startBtn">Iniciar Captura</button>
+  <button id="stopBtn" disabled>Parar Gravação</button>
+  <div id="progress-container"><div id="progress"></div></div>
+  <div id="debugPanel"></div>
 
-<script>
-const video = document.getElementById("preview");
-const canvas = document.getElementById("overlay");
-const instruction = document.getElementById("instruction");
-const timer = document.getElementById("timer");
-const startBtn = document.getElementById("startBtn");
-const stopBtn = document.getElementById("stopBtn");
-const progressBar = document.getElementById("progress");
-const modelStatus = document.getElementById("model-status");
+  <!-- FIX 1: Carregar face-api.js no final do body -->
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>
+  // FIX 2: Envolver toda a inicialização em DOMContentLoaded
+  document.addEventListener('DOMContentLoaded', function() {
+    // Elementos DOM
+    const video = document.getElementById("preview");
+    const canvas = document.getElementById("overlay");
+    const instruction = document.getElementById("instruction");
+    const timer = document.getElementById("timer");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const progressBar = document.getElementById("progress");
+    const modelStatus = document.getElementById("model-status");
+    const debugPanel = document.getElementById("debugPanel");
 
-const steps = [
-  {text:"👀 Olhe para a câmera", duration:5, direction:"center"},
-  {text:"😊 Sorria", duration:3, direction:"smile"},
-  {text:"⬆️ Olhe para cima", duration:7, direction:"up"},
-  {text:"⬇️ Olhe para baixo", duration:7, direction:"down"},
-  {text:"⬅️ Olhe para esquerda", duration:7, direction:"left"},
-  {text:"➡️ Olhe para direita", duration:7, direction:"right"},
-  {text:"↖️ Superior esquerda", duration:7, direction:"up_left"},
-  {text:"↗️ Superior direita", duration:7, direction:"up_right"},
-  {text:"↙️ Inferior esquerda", duration:7, direction:"down_left"},
-  {text:"↘️ Inferior direita", duration:7, direction:"down_right"}
-];
-
-let mediaRecorder, chunks=[], stopped=false, stream=null;
-let modelsLoaded=false, modelsFailed=false;
-let detectionInterval=null, holdStart=null, holdProgress=0;
-const holdRequired=1.5;
-let currentStep=0, elapsed=0, running=false;
-const totalTime = steps.reduce((a,b)=>a+b.duration,0);
-
-startBtn.onclick = startCapture;
-stopBtn.onclick = stopCapture;
-
-async function loadModels() {
-  if (modelsLoaded || modelsFailed) return;
-  try {
-    if (typeof faceapi === 'undefined') {
-      throw new Error("face-api.js não carregado");
+    // FIX 6: Função central de debug
+    function showDebug(msg) {
+      debugPanel.innerText = msg;
+      console.log("[DEBUG]", msg);
     }
-    modelStatus.innerText = "🔄 Carregando modelos de IA em segundo plano...";
-    const CDN = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights';
-    await faceapi.nets.tinyFaceDetector.loadFromUri(CDN);
-    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(CDN);
-    modelsLoaded = true;
-    modelStatus.innerText = "✅ Modelos de IA prontos!";
-  } catch(e) {
-    modelsFailed = true;
-    modelStatus.innerText = "⚠️ Modelos IA indisponíveis - modo simples ativo";
-    console.warn("Falha ao carregar modelos:", e);
-  }
-}
 
-async function startCapture() {
-  stopped = false;
-  running = true;
-  startBtn.disabled = true;
-  stopBtn.disabled = false;
-  progressBar.style.width = "0%";
-  instruction.innerText = "Abrindo câmera...";
-  timer.innerText = "";
+    // Parâmetros e variáveis
+    const steps = [
+      {text:"👀 Olhe para a câmera", duration:5, direction:"center"},
+      {text:"😊 Sorria", duration:3, direction:"smile"},
+      {text:"⬆️ Olhe para cima", duration:7, direction:"up"},
+      {text:"⬇️ Olhe para baixo", duration:7, direction:"down"},
+      {text:"⬅️ Olhe para esquerda", duration:7, direction:"left"},
+      {text:"➡️ Olhe para direita", duration:7, direction:"right"},
+      {text:"↖️ Superior esquerda", duration:7, direction:"up_left"},
+      {text:"↗️ Superior direita", duration:7, direction:"up_right"},
+      {text:"↙️ Inferior esquerda", duration:7, direction:"down_left"},
+      {text:"↘️ Inferior direita", duration:7, direction:"down_right"}
+    ];
+    let mediaRecorder, chunks=[], stopped=false, stream=null;
+    let modelsLoaded=false, modelsFailed=false;
+    let detectionInterval=null, holdStart=null, holdProgress=0;
+    const holdRequired=1.5;
+    let currentStep=0, elapsed=0, running=false;
+    const totalTime = steps.reduce((a,b)=>a+b.duration,0);
 
-  // 1. PRIMEIRO: abre a câmera
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    video.srcObject = stream;
-    await new Promise(r => { video.onloadedmetadata = r; });
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-  } catch (err) {
-    instruction.innerText = "❌ Permissão negada ou câmera indisponível.";
-    modelStatus.innerText = "Verifique as permissões do navegador.";
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    running = false;
-    return;
-  }
+    // FIX 3: Adicionar event listener com verificação de null
+    if (startBtn) {
+      startBtn.addEventListener('click', startCapture);
+    } else {
+      showDebug("Botão 'Iniciar Captura' não encontrado no DOM.");
+    }
+    if (stopBtn) {
+      stopBtn.addEventListener('click', stopCapture);
+    }
 
-  instruction.innerText = "Câmera ativa! Preparando...";
-
-  // 2. DEPOIS: carrega modelos em segundo plano (não bloqueia)
-  loadModels(); // sem await - não bloqueia
-
-  // Contagem regressiva
-  for (let i = 3; i > 0; i--) {
-    if (stopped) return;
-    timer.innerText = i;
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  timer.innerText = "";
-
-  chunks = [];
-  mediaRecorder = new MediaRecorder(stream);
-  mediaRecorder.ondataavailable = e => { if(e.data && e.data.size>0) chunks.push(e.data); };
-  mediaRecorder.onstop = () => {
-    const blob = new Blob(chunks, {type:"video/webm"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.style.display="none"; a.href=url; a.download="captura_facial.webm";
-    document.body.appendChild(a); a.click();
-    setTimeout(()=>{ URL.revokeObjectURL(url); document.body.removeChild(a); }, 100);
-    if(stream) stream.getTracks().forEach(t=>t.stop());
-  };
-  mediaRecorder.start();
-  currentStep=0; elapsed=0;
-  runSteps();
-}
-
-function stopCapture() {
-  stopped=true; running=false;
-  startBtn.disabled=false; stopBtn.disabled=true;
-  if(mediaRecorder && mediaRecorder.state!=="inactive") mediaRecorder.stop();
-  instruction.innerText="⏹️ Gravação parada";
-  timer.innerText="";
-  clearInterval(detectionInterval);
-  clearCanvas();
-}
-
-function clearCanvas() {
-  canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
-}
-
-async function runSteps() {
-  for (currentStep=0; currentStep<steps.length; currentStep++) {
-    if(stopped) return;
-    const step = steps[currentStep];
-    instruction.innerText = step.text;
-    holdStart=null; holdProgress=0;
-    let stepDone=false;
-
-    detectionInterval = setInterval(async ()=>{
-      if(!running) return;
-      const result = await detectDirection(step.direction);
-      drawOverlay(result.correct);
-      if(result.correct) {
-        if(!holdStart) holdStart=Date.now();
-        holdProgress = Math.min((Date.now()-holdStart)/1000, holdRequired);
-      } else {
-        holdStart=null; holdProgress=0;
+    // Carregamento dos modelos
+    async function loadModels() {
+      if (modelsLoaded || modelsFailed) return;
+      try {
+        if (typeof faceapi === 'undefined') {
+          throw new Error("face-api.js não carregado");
+        }
+        modelStatus.innerText = "🔄 Carregando modelos de IA em segundo plano...";
+        const CDN = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights';
+        await faceapi.nets.tinyFaceDetector.loadFromUri(CDN);
+        await faceapi.nets.faceLandmark68TinyNet.loadFromUri(CDN);
+        modelsLoaded = true;
+        modelStatus.innerText = "✅ Modelos de IA prontos!";
+        showDebug("Modelos carregados com sucesso.");
+      } catch(e) {
+        modelsFailed = true;
+        modelStatus.innerText = "⚠️ Modelos IA indisponíveis - modo simples ativo";
+        showDebug("Falha ao carregar modelos: " + e.message);
       }
-      timer.innerHTML=`
-        <div style="font-size:26px;color:#fff;">Mantenha por ${(holdRequired-holdProgress).toFixed(1)}s</div>
-        <div style="background:#222;border-radius:10px;width:80%;margin:8px auto;height:18px;overflow:hidden;">
-          <div style="height:18px;width:${(holdProgress/holdRequired)*100}%;background:#00ff88;transition:width 0.15s;"></div>
-        </div>`;
-      if(holdProgress>=holdRequired) stepDone=true;
-    }, 100);
+    }
 
-    while(!stepDone && !stopped) await new Promise(r=>setTimeout(r,100));
-    clearInterval(detectionInterval);
-    timer.innerHTML="";
+    // FIX 4: Checar HTTPS/localhost antes de tentar acessar a câmera
+    function isSecureContext() {
+      return window.isSecureContext || location.protocol === 'https:' || location.hostname === 'localhost';
+    }
 
-    elapsed += step.duration;
-    progressBar.style.width = ((elapsed/totalTime)*100)+"%";
+    // FIX 9: Envolver todo o corpo em try/catch mestre
+    async function startCapture() {
+      try {
+        showDebug("startCapture() chamado.");
+        stopped = false;
+        running = true;
+        if (startBtn) startBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = false;
+        progressBar.style.width = "0%";
+        instruction.innerText = "Abrindo câmera...";
+        timer.innerText = "";
 
-    if(!stopped) {
-      for(let i=step.duration; i>0; i--) {
+        // FIX 4: Checar HTTPS/localhost e suporte a mediaDevices
+        if (!isSecureContext() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          showDebug("getUserMedia só funciona em HTTPS ou localhost.");
+          instruction.innerText = "❌ Acesso à câmera só é permitido em HTTPS ou localhost.";
+          if (startBtn) startBtn.disabled = false;
+          if (stopBtn) stopBtn.disabled = true;
+          running = false;
+          return;
+        }
+
+        // 1. Abrir câmera
+        try {
+          showDebug("Solicitando acesso à câmera...");
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          video.srcObject = stream;
+          await new Promise(r => { video.onloadedmetadata = r; });
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          showDebug("Câmera aberta com sucesso.");
+        } catch (err) {
+          // FIX 8: Tratar erros de getUserMedia por nome
+          let msg = "Erro desconhecido ao acessar a câmera.";
+          if (err.name === "NotAllowedError") {
+            msg = "Permissão para acessar a câmera foi negada.";
+          } else if (err.name === "NotFoundError") {
+            msg = "Nenhuma câmera foi encontrada.";
+          } else if (err.name === "NotReadableError") {
+            msg = "A câmera está em uso por outro aplicativo.";
+          } else if (err.name === "SecurityError") {
+            msg = "Acesso à câmera bloqueado por política de segurança.";
+          }
+          showDebug(msg + " (" + err.name + ")");
+          instruction.innerText = "❌ " + msg;
+          if (startBtn) startBtn.disabled = false;
+          if (stopBtn) stopBtn.disabled = true;
+          running = false;
+          return;
+        }
+
+        instruction.innerText = "Câmera ativa! Preparando...";
+
+        // 2. Carregar modelos em segundo plano
+        loadModels();
+
+        // Contagem regressiva
+        for (let i = 3; i > 0; i--) {
+          if (stopped) return;
+          timer.innerText = i;
+          await new Promise(r => setTimeout(r, 1000));
+        }
+        timer.innerText = "";
+
+        chunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => { if(e.data && e.data.size>0) chunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(chunks, {type:"video/webm"});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.style.display="none"; a.href=url; a.download="captura_facial.webm";
+          document.body.appendChild(a); a.click();
+          setTimeout(()=>{ URL.revokeObjectURL(url); document.body.removeChild(a); }, 100);
+          if(stream) stream.getTracks().forEach(t=>t.stop());
+        };
+        mediaRecorder.start();
+        currentStep=0; elapsed=0;
+        showDebug("Gravação iniciada.");
+        runSteps();
+      } catch (e) {
+        // FIX 9: Captura de qualquer erro inesperado
+        showDebug("Erro inesperado: " + e.message);
+        instruction.innerText = "❌ Erro inesperado: " + e.message;
+        if (startBtn) startBtn.disabled = false;
+        if (stopBtn) stopBtn.disabled = true;
+        running = false;
+      }
+    }
+
+    function stopCapture() {
+      stopped=true; running=false;
+      if (startBtn) startBtn.disabled=false;
+      if (stopBtn) stopBtn.disabled=true;
+      if(mediaRecorder && mediaRecorder.state!=="inactive") mediaRecorder.stop();
+      instruction.innerText="⏹️ Gravação parada";
+      timer.innerText="";
+      clearInterval(detectionInterval);
+      clearCanvas();
+      showDebug("Gravação parada pelo usuário.");
+    }
+
+    function clearCanvas() {
+      canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+    }
+
+    async function runSteps() {
+      for (currentStep=0; currentStep<steps.length; currentStep++) {
         if(stopped) return;
-        timer.innerText=i;
-        await new Promise(r=>setTimeout(r,1000));
+        const step = steps[currentStep];
+        instruction.innerText = step.text;
+        holdStart=null; holdProgress=0;
+        let stepDone=false;
+
+        detectionInterval = setInterval(async ()=>{
+          if(!running) return;
+          const result = await detectDirection(step.direction);
+          drawOverlay(result.correct);
+          if(result.correct) {
+            if(!holdStart) holdStart=Date.now();
+            holdProgress = Math.min((Date.now()-holdStart)/1000, holdRequired);
+          } else {
+            holdStart=null; holdProgress=0;
+          }
+          timer.innerHTML=`
+            <div style="font-size:26px;color:#fff;">Mantenha por ${(holdRequired-holdProgress).toFixed(1)}s</div>
+            <div style="background:#222;border-radius:10px;width:80%;margin:8px auto;height:18px;overflow:hidden;">
+              <div style="height:18px;width:${(holdProgress/holdRequired)*100}%;background:#00ff88;transition:width 0.15s;"></div>
+            </div>`;
+          if(holdProgress>=holdRequired) stepDone=true;
+        }, 100);
+
+        while(!stepDone && !stopped) await new Promise(r=>setTimeout(r,100));
+        clearInterval(detectionInterval);
+        timer.innerHTML="";
+
+        elapsed += step.duration;
+        progressBar.style.width = ((elapsed/totalTime)*100)+"%";
+
+        if(!stopped) {
+          for(let i=step.duration; i>0; i--) {
+            if(stopped) return;
+            timer.innerText=i;
+            await new Promise(r=>setTimeout(r,1000));
+          }
+          timer.innerText="";
+        }
+
+        if(!stopped && currentStep<steps.length-1) {
+          instruction.innerText="⏳ Prepare-se";
+          for(let j=3; j>0; j--) {
+            timer.innerText=j;
+            await new Promise(r=>setTimeout(r,1000));
+          }
+        }
       }
       timer.innerText="";
+      instruction.innerText="✅ Concluído!";
+      if (startBtn) startBtn.disabled=false;
+      if (stopBtn) stopBtn.disabled=true;
+      if(mediaRecorder && mediaRecorder.state!=="inactive") mediaRecorder.stop();
+      clearCanvas();
+      showDebug("Fluxo de captura concluído.");
     }
 
-    if(!stopped && currentStep<steps.length-1) {
-      instruction.innerText="⏳ Prepare-se";
-      for(let j=3; j>0; j--) {
-        timer.innerText=j;
-        await new Promise(r=>setTimeout(r,1000));
+    function drawOverlay(correct) {
+      const ctx=canvas.getContext('2d');
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.lineWidth=12;
+      ctx.strokeStyle=correct?"#00ff88":"#ff4444";
+      ctx.strokeRect(6,6,canvas.width-12,canvas.height-12);
+    }
+
+    async function detectDirection(targetDirection) {
+      // Fallback: se modelos não carregaram, retorna correto (sem travar o app)
+      if(!modelsLoaded) return {correct: true};
+      if(!video || video.readyState<2) return {correct: false};
+
+      try {
+        const detection = await faceapi
+          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks(true);
+        if(!detection || !detection.landmarks) return {correct: false};
+
+        if(targetDirection==="smile") return {correct: true};
+
+        const lm = detection.landmarks;
+        const nose = lm.getNose()[3];
+        const leftEye = lm.getLeftEye();
+        const rightEye = lm.getRightEye();
+        const eyeCenter = {
+          x:(leftEye[0].x+rightEye[3].x)/2,
+          y:(leftEye[0].y+rightEye[3].y)/2
+        };
+        const dx = nose.x-eyeCenter.x;
+        const dy = nose.y-eyeCenter.y;
+        const horizontal = dx/(video.videoWidth*0.12);
+        const vertical = dy/(video.videoHeight*0.10);
+        const tol=0.35;
+
+        let correct=false;
+        switch(targetDirection){
+          case "center": correct=Math.abs(horizontal)<tol && Math.abs(vertical)<tol; break;
+          case "up":     correct=vertical<-tol && Math.abs(horizontal)<tol; break;
+          case "down":   correct=vertical>tol && Math.abs(horizontal)<tol; break;
+          case "left":   correct=horizontal<-tol && Math.abs(vertical)<tol; break;
+          case "right":  correct=horizontal>tol && Math.abs(vertical)<tol; break;
+          case "up_left":    correct=vertical<-tol && horizontal<-tol; break;
+          case "up_right":   correct=vertical<-tol && horizontal>tol; break;
+          case "down_left":  correct=vertical>tol && horizontal<-tol; break;
+          case "down_right": correct=vertical>tol && horizontal>tol; break;
+          default: correct=false;
+        }
+        return {correct};
+      } catch(e) {
+        return {correct: false};
       }
     }
-  }
-  timer.innerText="";
-  instruction.innerText="✅ Concluído!";
-  startBtn.disabled=false; stopBtn.disabled=true;
-  if(mediaRecorder && mediaRecorder.state!=="inactive") mediaRecorder.stop();
-  clearCanvas();
-}
-
-function drawOverlay(correct) {
-  const ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.lineWidth=12;
-  ctx.strokeStyle=correct?"#00ff88":"#ff4444";
-  ctx.strokeRect(6,6,canvas.width-12,canvas.height-12);
-}
-
-async function detectDirection(targetDirection) {
-  // FALLBACK: se modelos não carregaram, retorna correto (sem travar o app)
-  if(!modelsLoaded) return {correct: true};
-  if(!video || video.readyState<2) return {correct: false};
-
-  try {
-    const detection = await faceapi
-      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks(true);
-    if(!detection || !detection.landmarks) return {correct: false};
-
-    if(targetDirection==="smile") return {correct: true};
-
-    const lm = detection.landmarks;
-    const nose = lm.getNose()[3];
-    const leftEye = lm.getLeftEye();
-    const rightEye = lm.getRightEye();
-    const eyeCenter = {
-      x:(leftEye[0].x+rightEye[3].x)/2,
-      y:(leftEye[0].y+rightEye[3].y)/2
-    };
-    const dx = nose.x-eyeCenter.x;
-    const dy = nose.y-eyeCenter.y;
-    const horizontal = dx/(video.videoWidth*0.12);
-    const vertical = dy/(video.videoHeight*0.10);
-    const tol=0.35;
-
-    let correct=false;
-    switch(targetDirection){
-      case "center": correct=Math.abs(horizontal)<tol && Math.abs(vertical)<tol; break;
-      case "up":     correct=vertical<-tol && Math.abs(horizontal)<tol; break;
-      case "down":   correct=vertical>tol && Math.abs(horizontal)<tol; break;
-      case "left":   correct=horizontal<-tol && Math.abs(vertical)<tol; break;
-      case "right":  correct=horizontal>tol && Math.abs(vertical)<tol; break;
-      case "up_left":    correct=vertical<-tol && horizontal<-tol; break;
-      case "up_right":   correct=vertical<-tol && horizontal>tol; break;
-      case "down_left":  correct=vertical>tol && horizontal<-tol; break;
-      case "down_right": correct=vertical>tol && horizontal>tol; break;
-      default: correct=false;
-    }
-    return {correct};
-  } catch(e) {
-    return {correct: false};
-  }
-}
-</script>
+  }); // Fim do DOMContentLoaded
+  </script>
 </body>
 </html>
